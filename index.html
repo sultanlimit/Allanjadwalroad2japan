@@ -200,4 +200,254 @@ const TASKS = {
     { id: 'jp3', txt: 'Immersion santai (nonton/dengar Jepang) — opsional', optional: true },
   ],
   health: [
-    { id: 'h1', txt: 'Tidur sebelum j
+    { id: 'h1', txt: 'Tidur sebelum jam 23.30' },
+    { id: 'h2', txt: 'Makan teratur (3x) + cukup minum air' },
+  ],
+  sport: [
+    { id: 's1', txt: 'Olahraga hari ini (boxing/cardio/stretching sesuai jadwal)' },
+  ],
+  prayer: [
+    { id: 'p1', txt: 'Subuh' },
+    { id: 'p2', txt: 'Dzuhur' },
+    { id: 'p3', txt: 'Ashar' },
+    { id: 'p4', txt: 'Maghrib' },
+    { id: 'p5', txt: 'Isya' },
+  ],
+};
+
+function pad(n) { return String(n).padStart(2, '0'); }
+function fmtKey(d) { return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`; }
+function fmtLabel(d) {
+  const today = new Date(); today.setHours(0,0,0,0);
+  const cmp = new Date(d); cmp.setHours(0,0,0,0);
+  const diff = Math.round((cmp - today) / 86400000);
+  if (diff === 0) return 'Hari ini';
+  if (diff === -1) return 'Kemarin';
+  const days = ['Min','Sen','Sel','Rab','Kam','Jum','Sab'];
+  return `${days[d.getDay()]}, ${d.getDate()}/${d.getMonth()+1}`;
+}
+
+let currentDate = new Date();
+let dataCache = {};
+
+async function loadDay(key) {
+  if (dataCache[key]) return dataCache[key];
+  try {
+    const res = await window.storage.get('checklist:allan:' + key);
+    const val = res ? JSON.parse(res.value) : {};
+    dataCache[key] = val;
+    return val;
+  } catch (e) {
+    dataCache[key] = {};
+    return {};
+  }
+}
+
+async function saveDay(key, val) {
+  dataCache[key] = val;
+  try {
+    await window.storage.set('checklist:allan:' + key, JSON.stringify(val));
+  } catch (e) {}
+}
+
+function allTaskIds() {
+  return Object.values(TASKS).flat().map(t => t.id);
+}
+
+function requiredTaskIds() {
+  return Object.values(TASKS).flat().filter(t => !t.optional).map(t => t.id);
+}
+
+function renderSection(containerId, list, dayData) {
+  const el = document.getElementById(containerId);
+  el.innerHTML = '';
+  list.forEach(t => {
+    const checked = !!dayData[t.id];
+    const row = document.createElement('div');
+    row.className = 'item' + (checked ? ' done' : '');
+    row.innerHTML = `<div class="box${checked ? ' checked' : ''}">${CHECK_SVG}</div><div class="txt">${t.txt}</div>`;
+    row.addEventListener('click', () => toggle(t.id));
+    el.appendChild(row);
+  });
+}
+
+function updateBars(dayData) {
+  ['jp','health','sport','prayer'].forEach(sec => {
+    const list = TASKS[sec];
+    const done = list.filter(t => dayData[t.id]).length;
+    const pct = list.length ? Math.round((done / list.length) * 100) : 0;
+    document.getElementById(sec + '-bar').style.width = pct + '%';
+  });
+}
+
+async function computeStreak() {
+  let streak = 0;
+  let d = new Date();
+  const reqIds = requiredTaskIds();
+  for (let i = 0; i < 365; i++) {
+    const key = fmtKey(d);
+    const day = await loadDay(key);
+    const requiredDone = reqIds.every(id => day[id]);
+    if (requiredDone && Object.keys(day).length > 0) {
+      streak++;
+      d.setDate(d.getDate() - 1);
+    } else break;
+  }
+  document.getElementById('streakNum').textContent = streak;
+}
+
+async function computeWeek() {
+  let count = 0;
+  let d = new Date();
+  for (let i = 0; i < 7; i++) {
+    const key = fmtKey(d);
+    const day = await loadDay(key);
+    if (Object.values(day).some(v => v)) count++;
+    d.setDate(d.getDate() - 1);
+  }
+  document.getElementById('weekNum').textContent = count + '/7';
+}
+
+async function render() {
+  const key = fmtKey(currentDate);
+  document.getElementById('dateLabel').textContent = fmtLabel(currentDate);
+  const dayData = await loadDay(key);
+  renderSection('jp-items', TASKS.jp, dayData);
+  renderSection('health-items', TASKS.health, dayData);
+  renderSection('sport-items', TASKS.sport, dayData);
+  renderSection('prayer-items', TASKS.prayer, dayData);
+  updateBars(dayData);
+  await computeStreak();
+  await computeWeek();
+}
+
+async function toggle(id) {
+  const key = fmtKey(currentDate);
+  const dayData = await loadDay(key);
+  dayData[id] = !dayData[id];
+  await saveDay(key, dayData);
+  await render();
+}
+
+document.getElementById('prevDay').addEventListener('click', () => {
+  currentDate.setDate(currentDate.getDate() - 1);
+  render();
+});
+document.getElementById('nextDay').addEventListener('click', () => {
+  const today = new Date(); today.setHours(0,0,0,0);
+  const next = new Date(currentDate); next.setDate(next.getDate() + 1); next.setHours(0,0,0,0);
+  if (next <= today) {
+    currentDate.setDate(currentDate.getDate() + 1);
+    render();
+  }
+});
+document.getElementById('resetBtn').addEventListener('click', async () => {
+  const key = fmtKey(currentDate);
+  await saveDay(key, {});
+  await render();
+});
+
+const tabDaily = document.getElementById('tabDaily');
+const tabStats = document.getElementById('tabStats');
+const dailyView = document.getElementById('dailyView');
+const statsView = document.getElementById('statsView');
+
+tabDaily.addEventListener('click', () => {
+  tabDaily.classList.add('active');
+  tabStats.classList.remove('active');
+  dailyView.style.display = '';
+  statsView.style.display = 'none';
+});
+
+tabStats.addEventListener('click', async () => {
+  tabStats.classList.add('active');
+  tabDaily.classList.remove('active');
+  dailyView.style.display = 'none';
+  statsView.style.display = '';
+  await renderStats();
+});
+
+function pctColor(pct) {
+  if (pct === 0) return '#efeee6';
+  if (pct < 50) return '#dcefe2';
+  if (pct < 100) return '#8fc7a4';
+  return '#3c8a5f';
+}
+
+function dayPct(day) {
+  const ids = allTaskIds();
+  if (!day || Object.keys(day).length === 0) return null;
+  const done = ids.filter(id => day[id]).length;
+  return Math.round((done / ids.length) * 100);
+}
+
+async function renderStats() {
+  const N = 30;
+  const days = [];
+  let d = new Date();
+  for (let i = 0; i < N; i++) {
+    const key = fmtKey(d);
+    const data = await loadDay(key);
+    days.push({ date: new Date(d), key, data });
+    d.setDate(d.getDate() - 1);
+  }
+  days.reverse();
+
+  const trackedDays = days.filter(x => Object.keys(x.data).length > 0);
+
+  document.getElementById('s-totalDays').textContent = trackedDays.length;
+
+  const avgVals = trackedDays.map(x => dayPct(x.data)).filter(v => v !== null);
+  const avg30 = avgVals.length ? Math.round(avgVals.reduce((a,b)=>a+b,0) / avgVals.length) : 0;
+  document.getElementById('s-avg30').textContent = avg30 + '%';
+
+  let weekCount = 0;
+  days.slice(-7).forEach(x => { if (Object.values(x.data).some(v => v)) weekCount++; });
+  document.getElementById('s-week').textContent = weekCount + '/7';
+
+  let best = 0, cur = 0;
+  const reqIds = requiredTaskIds();
+  days.forEach(x => {
+    const ok = Object.keys(x.data).length > 0 && reqIds.every(id => x.data[id]);
+    cur = ok ? cur + 1 : 0;
+    if (cur > best) best = cur;
+  });
+  document.getElementById('s-bestStreak').textContent = best;
+
+  const catEl = document.getElementById('cat-stats');
+  catEl.innerHTML = '';
+  const catMeta = { jp: { name: 'Bahasa Jepang', color: '#d85a30' }, health: { name: 'Sehat & rutin', color: '#185fa5' }, sport: { name: 'Olahraga', color: '#3c8a5f' }, prayer: { name: 'Shalat', color: '#534ab7' } };
+  Object.keys(TASKS).forEach(cat => {
+    const ids = TASKS[cat].map(t => t.id);
+    let doneCount = 0, possible = 0;
+    trackedDays.forEach(x => {
+      ids.forEach(id => {
+        possible++;
+        if (x.data[id]) doneCount++;
+      });
+    });
+    const pct = possible ? Math.round((doneCount / possible) * 100) : 0;
+    const row = document.createElement('div');
+    row.className = 'cat-row';
+    row.innerHTML = `<div class="name">${catMeta[cat].name}</div><div class="bar-bg"><div class="bar-fill" style="width:${pct}%;background:${catMeta[cat].color}"></div></div><div class="pct">${pct}%</div>`;
+    catEl.appendChild(row);
+  });
+
+  const heatEl = document.getElementById('heatmap');
+  heatEl.innerHTML = '';
+  days.forEach(x => {
+    const pct = dayPct(x.data);
+    const cell = document.createElement('div');
+    cell.className = 'heat-cell';
+    cell.style.background = pct === null ? '#efeee6' : pctColor(pct);
+    cell.title = `${fmtLabel(x.date)}: ${pct === null ? 'belum diisi' : pct + '%'}`;
+    heatEl.appendChild(cell);
+  });
+
+  document.getElementById('statsEmptyHint').style.display = trackedDays.length === 0 ? '' : 'none';
+}
+
+render();
+</script>
+</body>
+</html>
